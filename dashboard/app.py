@@ -73,6 +73,7 @@ if all_years:
         min_value=int(min(all_years)),
         max_value=int(max(all_years)),
         value=(int(max(all_years)) - 1, int(max(all_years))),
+        help="San Diego's fiscal year runs July 1 – June 30. FY2025 = July 2024 through June 2025.",
     )
 else:
     year_range = (2020, 2026)
@@ -81,6 +82,11 @@ budget_cycle = st.sidebar.selectbox(
     "Budget Cycle",
     options=["All"] + all_cycles,
     index=0,
+    help=(
+        "**Adopted** = the budget approved by City Council at the start of the fiscal year. "
+        "**Proposed** = the Mayor's initial budget proposal before Council approval. "
+        "**Actual** = what was actually spent (available through FY2023)."
+    ),
 )
 
 selected_fund_types = st.sidebar.multiselect(
@@ -88,6 +94,12 @@ selected_fund_types = st.sidebar.multiselect(
     options=all_fund_types,
     default=None,
     placeholder="All fund types",
+    help=(
+        "How the city organizes its money into separate accounts. "
+        "**General Fund** covers core services (police, fire, parks). "
+        "**Enterprise Funds** are self-sustaining services that charge fees (water, sewer). "
+        "**Special Revenue/Grant Funds** are restricted to specific purposes."
+    ),
 )
 
 selected_dept_groups = st.sidebar.multiselect(
@@ -95,6 +107,15 @@ selected_dept_groups = st.sidebar.multiselect(
     options=all_dept_groups,
     default=None,
     placeholder="All departments",
+    help=(
+        "High-level grouping of city departments. For example, \"Public Safety\" "
+        "includes Police and Fire-Rescue. \"Public Utilities\" covers Water and Wastewater."
+    ),
+)
+
+st.sidebar.caption(
+    "**Year Range** applies to all tabs. **Fund Type** and **Dept Group** "
+    "primarily affect the Overview tab. Money Flow has its own year picker."
 )
 
 
@@ -103,21 +124,31 @@ def _where_clause(
     cycle: str = budget_cycle,
     fund_types: list[str] = selected_fund_types,
     dept_groups: list[str] = selected_dept_groups,
+    *,
+    has_fund_type: bool = True,
+    has_dept_group: bool = True,
 ) -> str:
-    """Build WHERE clause from sidebar filter selections."""
+    """Build WHERE clause from sidebar filter selections.
+
+    Set has_fund_type=False or has_dept_group=False when querying
+    parquets that don't have those columns.
+    """
     clauses = [f"fiscal_year BETWEEN {yr[0]} AND {yr[1]}"]
     if cycle != "All":
         clauses.append(f"budget_cycle = '{cycle.replace(chr(39), chr(39)*2)}'")
-    if fund_types:
+    if fund_types and has_fund_type:
         escaped = ", ".join(f"'{t.replace(chr(39), chr(39)*2)}'" for t in fund_types)
         clauses.append(f"fund_type IN ({escaped})")
-    if dept_groups:
+    if dept_groups and has_dept_group:
         escaped = ", ".join(f"'{g.replace(chr(39), chr(39)*2)}'" for g in dept_groups)
         clauses.append(f"dept_group IN ({escaped})")
     return "WHERE " + " AND ".join(clauses)
 
 
 WHERE = _where_clause()
+WHERE_NO_DEPT = _where_clause(has_dept_group=False)
+WHERE_NO_FUND = _where_clause(has_fund_type=False)
+WHERE_NO_BOTH = _where_clause(has_fund_type=False, has_dept_group=False)
 
 # ── Header ──
 st.title("San Diego City Budget")
@@ -140,13 +171,22 @@ with tab_sankey:
     st.subheader("Where Does Your Tax Dollar Go?")
     st.caption(
         "Revenue sources (left) flow through fund types (middle) into department spending (right). "
-        f"Showing the most recent year in your selected range (**FY{year_range[1]}**). "
         "Note: Inflows to a fund may exceed outflows because some revenue goes to reserves, "
         "debt service, fund balance, or capital projects not captured in operating expenses."
     )
 
-    # Use the most recent year in the range for the Sankey
-    sankey_year = year_range[1]
+    # Sankey is a single-year snapshot — give it its own year picker
+    available_sankey_years = sorted(query(f"""
+        SELECT DISTINCT fiscal_year FROM '{_AGG}/sankey_revenue.parquet'
+        ORDER BY fiscal_year
+    """)["fiscal_year"].tolist())
+    default_idx = len(available_sankey_years) - 1 if available_sankey_years else 0
+    sankey_year = st.selectbox(
+        "Fiscal Year",
+        options=available_sankey_years,
+        index=default_idx,
+        help="The Sankey diagram shows one year at a time. Other tabs use the sidebar year range.",
+    )
     sankey_cycle = budget_cycle if budget_cycle != "All" else "adopted"
 
     # Layer 1: revenue source → fund type (from revenue records)
@@ -335,17 +375,17 @@ with tab_overview:
     kpi_expense = query(f"""
         SELECT SUM(amount) AS total
         FROM '{_AGG}/dept_budget_trends.parquet'
-        {WHERE} AND source = 'budget' AND revenue_or_expense = 'Expense'
+        {WHERE_NO_FUND} AND source = 'budget' AND revenue_or_expense = 'Expense'
     """)
     kpi_revenue = query(f"""
         SELECT SUM(amount) AS total
         FROM '{_AGG}/revenue_breakdown.parquet'
-        {WHERE} AND source = 'budget'
+        {WHERE_NO_BOTH} AND source = 'budget'
     """)
     kpi_gf = query(f"""
         SELECT SUM(amount) AS total
         FROM '{_AGG}/fund_allocation.parquet'
-        {WHERE} AND fund_type = 'General Fund' AND source = 'budget'
+        {WHERE_NO_DEPT} AND fund_type = 'General Fund' AND source = 'budget'
           AND revenue_or_expense = 'Expense'
     """)
 
@@ -373,7 +413,7 @@ with tab_overview:
         top_dept = query(f"""
             SELECT dept_name AS "Department", SUM(amount) AS "Amount"
             FROM '{_AGG}/dept_budget_trends.parquet'
-            {WHERE} AND source = 'budget' AND revenue_or_expense = 'Expense'
+            {WHERE_NO_FUND} AND source = 'budget' AND revenue_or_expense = 'Expense'
             GROUP BY dept_name
             ORDER BY "Amount" DESC
             LIMIT 10
@@ -387,7 +427,7 @@ with tab_overview:
         fund_dist = query(f"""
             SELECT fund_type AS "Fund Type", SUM(amount) AS "Amount"
             FROM '{_AGG}/fund_allocation.parquet'
-            {WHERE} AND source = 'budget' AND revenue_or_expense = 'Expense'
+            {WHERE_NO_DEPT} AND source = 'budget' AND revenue_or_expense = 'Expense'
             GROUP BY fund_type
             ORDER BY "Amount" DESC
         """)
@@ -400,7 +440,7 @@ with tab_overview:
     rev_src = query(f"""
         SELECT account_type AS "Revenue Source", SUM(amount) AS "Amount"
         FROM '{_AGG}/revenue_breakdown.parquet'
-        {WHERE} AND source = 'budget'
+        {WHERE_NO_BOTH} AND source = 'budget'
         GROUP BY account_type
         ORDER BY "Amount" DESC
     """)
@@ -417,7 +457,7 @@ with tab_overview:
                 account_class AS "Category",
                 SUM(amount) AS "Budget ($)"
             FROM '{_AGG}/dept_detail.parquet'
-            {WHERE} AND source = 'budget' AND revenue_or_expense = 'Expense'
+            {WHERE_NO_FUND} AND source = 'budget' AND revenue_or_expense = 'Expense'
             GROUP BY dept_name, dept_division, account_class
             ORDER BY dept_name, "Budget ($)" DESC
         """)
@@ -504,25 +544,33 @@ with tab_bva:
 
 # ── TAB 4: Trends ──
 with tab_trends:
-    st.subheader("Total Budget Over Time")
-    total_trend = query(f"""
-        SELECT fiscal_year AS "Fiscal Year", SUM(amount) / 1e9 AS "Budget ($B)"
+    st.subheader("Revenue vs Expense Budget Over Time")
+    rev_vs_exp = query(f"""
+        SELECT
+            fiscal_year,
+            revenue_or_expense,
+            SUM(amount) / 1e9 AS amount_b
         FROM '{_AGG}/dept_budget_trends.parquet'
-        WHERE source = 'budget' AND budget_cycle = 'adopted'
-          AND revenue_or_expense = 'Expense'
-        GROUP BY fiscal_year
+        WHERE fiscal_year BETWEEN {year_range[0]} AND {year_range[1]}
+          AND source = 'budget' AND budget_cycle = 'adopted'
+          AND revenue_or_expense IS NOT NULL
+        GROUP BY fiscal_year, revenue_or_expense
         ORDER BY fiscal_year
     """)
-    if not total_trend.empty:
-        total_trend["Fiscal Year"] = total_trend["Fiscal Year"].astype(str)
-        st.line_chart(total_trend.set_index("Fiscal Year"), color=CHART_COLOR)
+    if not rev_vs_exp.empty:
+        rev_exp_pivot = rev_vs_exp.pivot_table(
+            index="fiscal_year", columns="revenue_or_expense", values="amount_b", fill_value=0
+        )
+        rev_exp_pivot.index = rev_exp_pivot.index.astype(str)
+        st.line_chart(rev_exp_pivot, color=[CHART_COLOR, "#2a6496"], y_label="Billions ($)")
 
     # Department group trends
     st.subheader("Spending by Department Group")
     dept_trend = query(f"""
         SELECT fiscal_year, dept_group, SUM(amount) / 1e6 AS amount_m
         FROM '{_AGG}/dept_budget_trends.parquet'
-        WHERE source = 'budget' AND budget_cycle = 'adopted'
+        WHERE fiscal_year BETWEEN {year_range[0]} AND {year_range[1]}
+          AND source = 'budget' AND budget_cycle = 'adopted'
           AND revenue_or_expense = 'Expense'
           AND dept_group IS NOT NULL
         GROUP BY fiscal_year, dept_group
@@ -543,7 +591,8 @@ with tab_trends:
     rev_trend = query(f"""
         SELECT fiscal_year, account_type, SUM(amount) / 1e6 AS amount_m
         FROM '{_AGG}/revenue_breakdown.parquet'
-        WHERE source = 'budget' AND budget_cycle = 'adopted'
+        WHERE fiscal_year BETWEEN {year_range[0]} AND {year_range[1]}
+          AND source = 'budget' AND budget_cycle = 'adopted'
         GROUP BY fiscal_year, account_type
         ORDER BY fiscal_year
     """)
@@ -561,7 +610,8 @@ with tab_trends:
     gf_trend = query(f"""
         SELECT fiscal_year AS "Fiscal Year", SUM(amount) / 1e9 AS "General Fund ($B)"
         FROM '{_AGG}/general_fund_summary.parquet'
-        WHERE source = 'budget' AND budget_cycle = 'adopted'
+        WHERE fiscal_year BETWEEN {year_range[0]} AND {year_range[1]}
+          AND source = 'budget' AND budget_cycle = 'adopted'
           AND revenue_or_expense = 'Expense'
         GROUP BY fiscal_year
         ORDER BY fiscal_year
@@ -609,7 +659,7 @@ with tab_deep:
     gf_depts = query(f"""
         SELECT dept_name AS "Department", SUM(amount) / 1e6 AS "Amount ($M)"
         FROM '{_AGG}/general_fund_summary.parquet'
-        {WHERE} AND source = 'budget' AND revenue_or_expense = 'Expense'
+        {WHERE_NO_FUND} AND source = 'budget' AND revenue_or_expense = 'Expense'
         GROUP BY dept_name
         ORDER BY SUM(amount) DESC
         LIMIT 15
