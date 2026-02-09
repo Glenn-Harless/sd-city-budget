@@ -1,0 +1,35 @@
+name: Refresh Budget Data
+
+on:
+  schedule:
+    - cron: "30 8 1 * *"  # Monthly 1st at 8:30 UTC (12:30 AM PST)
+  workflow_dispatch: {}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run pipeline
+        run: uv run python -m pipeline.build --force
+
+      - name: Commit updated data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/processed/budget.parquet data/aggregated/
+          git diff --cached --quiet || git commit -m "chore: refresh budget data $(date -u +%Y-%m-%d)"
+          git push
