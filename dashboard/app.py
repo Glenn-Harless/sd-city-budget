@@ -162,8 +162,8 @@ st.markdown(
 # ==================================================================
 # Tab layout
 # ==================================================================
-tab_sankey, tab_overview, tab_bva, tab_trends, tab_deep = st.tabs(
-    ["Money Flow", "Overview", "Budget vs Actuals", "Trends", "Deep Dive"]
+tab_sankey, tab_overview, tab_bva, tab_trends, tab_cip, tab_deep = st.tabs(
+    ["Money Flow", "Overview", "Budget vs Actuals", "Trends", "Capital Projects", "Deep Dive"]
 )
 
 # ── TAB 1: Money Flow (Sankey) ──
@@ -434,6 +434,7 @@ with tab_overview:
         if not fund_dist.empty:
             fund_dist["Amount"] = fund_dist["Amount"] / 1e6
             st.bar_chart(fund_dist.set_index("Fund Type"), horizontal=True, y_label="Millions ($)", color=CHART_COLOR)
+            st.caption("For capital project details, see the **Capital Projects** tab.")
 
     # Revenue sources
     st.subheader("Revenue Sources")
@@ -620,7 +621,137 @@ with tab_trends:
         gf_trend["Fiscal Year"] = gf_trend["Fiscal Year"].astype(str)
         st.line_chart(gf_trend.set_index("Fiscal Year"), color=CHART_COLOR)
 
-# ── TAB 5: Deep Dive ──
+# ── TAB 5: Capital Projects ──
+with tab_cip:
+    st.subheader("What Are We Building?")
+    st.caption(
+        "Capital Improvement Projects (CIP) are major infrastructure investments — "
+        "water mains, fire stations, street resurfacing, parks, and more. "
+        "These are funded separately from the operating budget."
+    )
+
+    # KPI row
+    cip_totals = query(f"""
+        SELECT
+            SUM(amount) / 1e9 AS total_b,
+            count(DISTINCT project_name) AS n_projects,
+            count(DISTINCT asset_owning_dept) AS n_depts
+        FROM '{_AGG}/cip_by_dept.parquet'
+        WHERE fiscal_year BETWEEN {year_range[0]} AND {year_range[1]}
+          AND source = 'budget'
+    """)
+    cip_top_dept = query(f"""
+        SELECT asset_owning_dept, SUM(amount) / 1e6 AS amt
+        FROM '{_AGG}/cip_by_dept.parquet'
+        WHERE fiscal_year BETWEEN {year_range[0]} AND {year_range[1]}
+          AND source = 'budget'
+        GROUP BY asset_owning_dept
+        ORDER BY amt DESC
+        LIMIT 1
+    """)
+    operating_total = query(f"""
+        SELECT SUM(amount) AS total
+        FROM '{_AGG}/dept_budget_trends.parquet'
+        WHERE fiscal_year BETWEEN {year_range[0]} AND {year_range[1]}
+          AND source = 'budget' AND budget_cycle = 'adopted'
+          AND revenue_or_expense = 'Expense'
+    """)
+
+    cip_total_val = cip_totals["total_b"].iloc[0] if not cip_totals.empty else 0
+    op_total_val = (operating_total["total"].iloc[0] or 0) / 1e9 if not operating_total.empty else 0
+    combined = cip_total_val + op_total_val
+    cip_pct = (cip_total_val / combined * 100) if combined > 0 else 0
+
+    c1, c2, c3, c4 = st.columns(4)
+    if not cip_totals.empty:
+        c1.metric(
+            "Total CIP Budget", f"${cip_total_val:.2f}B",
+            help="Capital projects are separate from the operating budget and typically represent ~15% of total city spending.",
+        )
+        c2.metric("% of Total City Budget", f"{cip_pct:.0f}%")
+        c3.metric("Projects", f"{int(cip_totals['n_projects'].iloc[0]):,}")
+    if not cip_top_dept.empty:
+        c4.metric("Top Department", cip_top_dept["asset_owning_dept"].iloc[0])
+
+    # Department filter
+    cip_depts = query(f"""
+        SELECT DISTINCT asset_owning_dept
+        FROM '{_AGG}/cip_by_dept.parquet'
+        WHERE asset_owning_dept IS NOT NULL
+        ORDER BY asset_owning_dept
+    """)["asset_owning_dept"].tolist()
+
+    cip_dept_filter = st.selectbox(
+        "Filter by Department",
+        options=["All Departments"] + cip_depts,
+        key="cip_dept_filter",
+    )
+
+    cip_dept_clause = ""
+    if cip_dept_filter != "All Departments":
+        safe = cip_dept_filter.replace("'", "''")
+        cip_dept_clause = f"AND asset_owning_dept = '{safe}'"
+
+    # Bar chart — projects when filtered to one dept, departments otherwise
+    if cip_dept_filter != "All Departments":
+        cip_chart = query(f"""
+            SELECT project_name AS "Project", SUM(amount) / 1e6 AS "Amount ($M)"
+            FROM '{_AGG}/cip_by_dept.parquet'
+            WHERE fiscal_year BETWEEN {year_range[0]} AND {year_range[1]}
+              AND source = 'budget'
+              {cip_dept_clause}
+            GROUP BY project_name
+            ORDER BY SUM(amount) DESC
+            LIMIT 15
+        """)
+        if not cip_chart.empty:
+            st.bar_chart(cip_chart.set_index("Project"), horizontal=True, y_label="Millions ($)", color=CHART_COLOR)
+    else:
+        cip_chart = query(f"""
+            SELECT asset_owning_dept AS "Department", SUM(amount) / 1e6 AS "Amount ($M)"
+            FROM '{_AGG}/cip_by_dept.parquet'
+            WHERE fiscal_year BETWEEN {year_range[0]} AND {year_range[1]}
+              AND source = 'budget'
+            GROUP BY asset_owning_dept
+            ORDER BY SUM(amount) DESC
+            LIMIT 15
+        """)
+        if not cip_chart.empty:
+            st.bar_chart(cip_chart.set_index("Department"), horizontal=True, y_label="Millions ($)", color=CHART_COLOR)
+
+    # Project detail table
+    st.subheader("Project Details")
+    cip_projects = query(f"""
+        SELECT
+            asset_owning_dept AS "Department",
+            project_name AS "Project",
+            SUM(amount) / 1e6 AS "Budget ($M)"
+        FROM '{_AGG}/cip_by_dept.parquet'
+        WHERE fiscal_year BETWEEN {year_range[0]} AND {year_range[1]}
+          AND source = 'budget'
+          AND project_name IS NOT NULL
+          {cip_dept_clause}
+        GROUP BY asset_owning_dept, project_name
+        HAVING SUM(amount) > 0
+        ORDER BY SUM(amount) DESC
+    """)
+    if not cip_projects.empty:
+        st.caption(f"Showing {len(cip_projects)} projects totaling ${cip_projects['Budget ($M)'].sum():,.0f}M")
+        st.dataframe(
+            cip_projects,
+            use_container_width=True,
+            hide_index=True,
+            height=500,
+            column_config={
+                "Budget ($M)": st.column_config.NumberColumn(
+                    "Budget ($M)", format="%.1f"
+                ),
+            },
+        )
+    else:
+        st.info("No capital projects found for the selected filters.")
+
+# ── TAB 6: Deep Dive ──
 with tab_deep:
     # Department drill-down
     st.subheader("Department Detail")
@@ -685,16 +816,3 @@ with tab_deep:
     if not council.empty:
         st.bar_chart(council.set_index("Council Office"), horizontal=True, color=CHART_COLOR)
 
-    # Capital projects
-    st.subheader("Capital Improvement Projects")
-    cip = query(f"""
-        SELECT asset_owning_dept AS "Department", SUM(amount) / 1e6 AS "Amount ($M)"
-        FROM '{_AGG}/cip_by_dept.parquet'
-        WHERE fiscal_year BETWEEN {year_range[0]} AND {year_range[1]}
-          AND source = 'budget'
-        GROUP BY asset_owning_dept
-        ORDER BY SUM(amount) DESC
-        LIMIT 15
-    """)
-    if not cip.empty:
-        st.bar_chart(cip.set_index("Department"), horizontal=True, color=CHART_COLOR)
