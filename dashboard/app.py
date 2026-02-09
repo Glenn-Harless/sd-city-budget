@@ -140,7 +140,7 @@ with tab_sankey:
     st.subheader("Where Does Your Tax Dollar Go?")
     st.caption(
         "Revenue sources (left) flow through fund types (middle) into department spending (right). "
-        "Showing adopted budget data for the selected fiscal year range. "
+        f"Showing the most recent year in your selected range (**FY{year_range[1]}**). "
         "Note: Inflows to a fund may exceed outflows because some revenue goes to reserves, "
         "debt service, fund balance, or capital projects not captured in operating expenses."
     )
@@ -268,6 +268,7 @@ with tab_sankey:
         col2.metric(
             "Your Share (per resident)",
             f"${total_revenue / sd_population:,.0f}",
+            help="Total revenue divided by San Diego's estimated population of ~1.4M (2023 Census estimate).",
         )
 
     with st.expander("What do these labels mean?"):
@@ -382,7 +383,7 @@ with tab_overview:
             st.bar_chart(top_dept.set_index("Department"), horizontal=True, y_label="Millions ($)", color=CHART_COLOR)
 
     with chart_right:
-        st.subheader("Fund Allocation")
+        st.subheader("Spending by Fund Type")
         fund_dist = query(f"""
             SELECT fund_type AS "Fund Type", SUM(amount) AS "Amount"
             FROM '{_AGG}/fund_allocation.parquet'
@@ -436,7 +437,9 @@ with tab_overview:
 with tab_bva:
     st.subheader("Budget vs Actual Spending")
     st.caption(
-        "Compares adopted budget to actual spending. Actuals are only available through FY2023."
+        "Compares adopted budget to actual spending. Actuals are only available through FY2023 "
+        "because the City of San Diego has not yet published more recent spending data to the "
+        "open data portal. This can lag 12-18+ months behind the current fiscal year."
     )
 
     bva = query(f"""
@@ -479,13 +482,13 @@ with tab_bva:
         st.bar_chart(chart_data, horizontal=True, color=[CHART_COLOR, "#2a6496"])
 
     # Over/under spends
-    st.subheader("Biggest Variances")
+    st.subheader("Biggest Over/Under Spends")
     variance = query(f"""
         SELECT
             dept_name AS "Department",
             SUM(budget_amount) AS "Budget",
             SUM(actual_amount) AS "Actual",
-            SUM(actual_amount) - SUM(budget_amount) AS "Variance"
+            SUM(actual_amount) - SUM(budget_amount) AS "Over/Under"
         FROM '{_AGG}/budget_vs_actuals.parquet'
         WHERE fiscal_year BETWEEN {year_range[0]} AND {year_range[1]}
           AND account_type IN ('Personnel', 'Non-Personnel')
@@ -495,7 +498,7 @@ with tab_bva:
         LIMIT 15
     """)
     if not variance.empty:
-        for col_name in ["Budget", "Actual", "Variance"]:
+        for col_name in ["Budget", "Actual", "Over/Under"]:
             variance[col_name] = variance[col_name].apply(lambda x: f"${x:,.0f}")
         st.dataframe(variance, use_container_width=True, hide_index=True)
 
