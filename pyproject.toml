@@ -9,7 +9,11 @@ dependencies = [
     "streamlit>=1.40",
     "plotly>=5.18",
     "pyarrow>=17.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "fastmcp>=2.12",
 ]
 
 [project.scripts]
 budget-build = "pipeline.build:main"
+budget-mcp = "api.mcp_server:main"
