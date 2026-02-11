@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "sd-city-budget": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "api.mcp_server"]
+    }
+  }
+}
