@@ -53,7 +53,11 @@ def root():
 @app.get("/filters", response_model=FilterOptions)
 def filters():
     """Available fiscal years, budget cycles, fund types, and department groups."""
-    return queries.get_filter_options()
+    try:
+        return queries.get_filter_options()
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
 
 
 @app.get("/overview", response_model=OverviewResponse)
