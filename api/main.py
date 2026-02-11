@@ -50,7 +50,7 @@ def root():
     }
 
 
-@app.get("/filters", response_model=FilterOptions)
+@app.get("/filters")
 def filters():
     """Available fiscal years, budget cycles, fund types, and department groups."""
     try:
