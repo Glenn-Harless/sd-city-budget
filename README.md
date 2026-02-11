@@ -3,6 +3,8 @@
 ## Overview
 Visualize how San Diego collects and spends public money. Compare budgeted vs. actual expenditures and revenue across city departments, track year-over-year trends, and surface spending gaps.
 
+**Live Dashboard**: https://sd-city-budget-live.streamlit.app/
+
 ## Key Questions
 - How does revenue flow from sources (taxes, fees, grants) into departments?
 - Which departments consistently overspend or underspend their budgets?
