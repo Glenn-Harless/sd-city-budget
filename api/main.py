@@ -28,6 +28,15 @@ app = FastAPI(
 )
 
 
+@app.get("/health")
+def health():
+    """Debug endpoint — shows data path and file availability."""
+    from pathlib import Path
+    agg = Path(queries._AGG)
+    files = sorted(p.name for p in agg.glob("*.parquet")) if agg.exists() else []
+    return {"agg_path": str(agg), "exists": agg.exists(), "files": files}
+
+
 @app.get("/")
 def root():
     return {
