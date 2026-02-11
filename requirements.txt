@@ -2,3 +2,4 @@ duckdb>=1.1
 streamlit>=1.40
 plotly>=5.18
 pyarrow>=17.0
+pandas>=2.0
